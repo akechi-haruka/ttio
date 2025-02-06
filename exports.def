@@ -1,0 +1,19 @@
+LIBRARY ttio
+
+EXPORTS
+    ArrowheadUSBGetDeviceVersion=ttioGetDeviceVersion
+    ArrowheadUSBClose=ttioClose
+    ArrowheadUSBGetStatus=ttioGetStatus
+    ArrowheadUSBOpen=ttioOpen
+    ArrowheadUSBUpdate=ttioUpdate
+    VisionUSBGetDeviceVersion=ttioGetDeviceVersion
+    VisionUSBIOClose=ttioClose
+    VisionUSBIOGetStatus=ttioGetStatus
+    VisionUSBIOOpen=ttioOpen
+    VisionUSBIOUpdate=ttioUpdate
+    NESiCAReaderCancelRead
+    NESiCAReaderGetID
+    NESiCAReaderGetResult
+    NESiCAReaderGetStatus
+    NESiCAReaderIsError
+    NESiCAReaderRead
