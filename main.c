@@ -10,7 +10,7 @@
 struct config {
     unsigned int vk_scan;
     unsigned int vk_input[32];
-    char cardid[32];
+    char cardid[17];
 };
 
 struct iodata {
@@ -32,26 +32,12 @@ static boolean reading = false;
 static boolean scanned = false;
 static struct config cfg;
 
-int hex2bin(char *source_str, char *dest_buffer) {
-    char *line = source_str;
-    char *data = line;
-    int offset;
-    int read_byte;
-    int data_len = 0;
-
-    while (sscanf(data, " %02x%n", &read_byte, &offset) == 1) {
-        dest_buffer[data_len++] = read_byte;
-        data += offset;
-    }
-    return data_len;
-}
-
 boolean APIENTRY DllMain(UNUSED HMODULE hinstDLL, DWORD fdwReason, UNUSED LPVOID lpReserved) {
     if (fdwReason == DLL_PROCESS_ATTACH) {
         OutputDebugString("TTIO 0.1, (c) 2024 Haruka\n");
 
         cfg.vk_scan = GetPrivateProfileIntA(KEY_NAME, "scan", VK_RETURN, CONFIG_NAME);
-        GetPrivateProfileStringA(KEY_NAME, "card_id", "00000000000000000000000000000000", cfg.cardid, 32, CONFIG_NAME);
+        GetPrivateProfileStringA(KEY_NAME, "card_id", "0000000000000000", cfg.cardid, 16, CONFIG_NAME);
         for (int i = 0; i < 32; i++) {
             char key[16];
             sprintf(key, "key%d", i);
@@ -76,7 +62,7 @@ EXPORT int NESiCAReaderGetID(struct carddata *data) {
     OutputDebugString("NESiCAReaderGetID\n");
     ZeroMemory(data, sizeof(struct carddata));
     if (scanned) {
-        hex2bin(cfg.cardid, data->id);
+        memcpy(data->id, cfg.cardid, 16);
         return 1;
     }
     return 0;
