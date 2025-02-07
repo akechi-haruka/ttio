@@ -37,7 +37,7 @@ boolean APIENTRY DllMain(UNUSED HMODULE hinstDLL, DWORD fdwReason, UNUSED LPVOID
         OutputDebugString("TTIO 0.1, (c) 2024 Haruka\n");
 
         cfg.vk_scan = GetPrivateProfileIntA(KEY_NAME, "scan", VK_RETURN, CONFIG_NAME);
-        GetPrivateProfileStringA(KEY_NAME, "card_id", "0000000000000000", cfg.cardid, 16, CONFIG_NAME);
+        GetPrivateProfileStringA(KEY_NAME, "card_id", "0000000000000000", cfg.cardid, 17, CONFIG_NAME);
         for (int i = 0; i < 32; i++) {
             char key[16];
             sprintf(key, "key%d", i);
