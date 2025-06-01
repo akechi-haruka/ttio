@@ -1,95 +1,159 @@
 #include <stdio.h>
 #include <windows.h>
 #include <stdbool.h>
+#include "ttio.h"
+#include "subprojects/aimelib/aime.h"
+#include "subprojects/aimelib/util/dprintf.h"
+#include "subprojects/segapi/api/api.h"
+
 #define EXPORT __declspec(dllexport)
 #define IsKeyDown(k) (GetAsyncKeyState(k) & 0x8000)
-#define KEY_NAME "ttio"
+#define TTIO_KEY_NAME "ttio"
+#define AIME_KEY_NAME "aime"
+#define API_KEY_NAME "api"
 #define CONFIG_NAME ".\\ttio.ini"
 #define UNUSED __attribute__ ((unused))
+#define MIN_API_VER 0x010101
+#define FELICA_CARD_LEN 16
 
-struct config {
-    unsigned int vk_scan;
-    unsigned int vk_input[32];
-    char cardid[17];
-};
-
-struct iodata {
-    int buttons;
-    short analog[8];
-    short encoder[4];
-    char unk2[32];
-    short coin[2];
-    short coin2[2];
-    char unk3[4];
-};
-
-struct carddata {
-    char id[16];
-    char unk[28];
-};
-
-static boolean reading = false;
+static boolean game_is_reading = false;
 static boolean scanned = false;
 static struct config cfg;
+static struct aime_config aime_cfg;
+static struct api_config api_cfg;
+
+static HRESULT aime_status = S_FALSE;
+static uint8_t* api_card = NULL;
+static bool api_is_polling_for_card = false;
 
 boolean APIENTRY DllMain(UNUSED HMODULE hinstDLL, DWORD fdwReason, UNUSED LPVOID lpReserved) {
     if (fdwReason == DLL_PROCESS_ATTACH) {
-        OutputDebugString("TTIO 0.1, (c) 2024 Haruka\n");
+        dprintf("TTIO 0.2, (c) 2024-2025 Haruka\n");
 
-        cfg.vk_scan = GetPrivateProfileIntA(KEY_NAME, "scan", VK_RETURN, CONFIG_NAME);
-        GetPrivateProfileStringA(KEY_NAME, "card_id", "0000000000000000", cfg.cardid, 17, CONFIG_NAME);
+        cfg.vk_scan = GetPrivateProfileIntA(TTIO_KEY_NAME, "scan", VK_RETURN, CONFIG_NAME);
+        GetPrivateProfileStringA(TTIO_KEY_NAME, "card_id", "0000000000000000", cfg.cardid, 17, CONFIG_NAME);
         for (int i = 0; i < 32; i++) {
             char key[16];
             sprintf(key, "key%d", i);
-            cfg.vk_input[i] = GetPrivateProfileIntA(KEY_NAME, key, 0, CONFIG_NAME);
+            cfg.vk_input[i] = GetPrivateProfileIntA(TTIO_KEY_NAME, key, 0, CONFIG_NAME);
         }
 
-        OutputDebugString("TTIO is loaded\ncard id=");
-        OutputDebugString(cfg.cardid);
-        OutputDebugString("\n");
+        aime_cfg.enable = GetPrivateProfileIntA(AIME_KEY_NAME, "enable", 0, CONFIG_NAME);
+        if (aime_cfg.enable) {
+            aime_cfg.port = GetPrivateProfileIntA(AIME_KEY_NAME, "port", 4, CONFIG_NAME);
+            aime_cfg.high_baudrate = GetPrivateProfileIntA(AIME_KEY_NAME, "high_baudrate", 1, CONFIG_NAME);
+            aime_cfg.custom_led_flash = GetPrivateProfileIntA(AIME_KEY_NAME, "custom_led_flash", 0, CONFIG_NAME);
+        }
+
+        api_cfg.enable = GetPrivateProfileIntA(API_KEY_NAME, "enable", 0, CONFIG_NAME);
+        if (api_cfg.enable) {
+            api_cfg.service_index = GetPrivateProfileIntA(API_KEY_NAME, "serviceButtonIndex", 13, CONFIG_NAME);
+            api_cfg.test_index = GetPrivateProfileIntA(API_KEY_NAME, "testButtonIndex", 12, CONFIG_NAME);
+            api_cfg.coin_index = GetPrivateProfileIntA(API_KEY_NAME, "coinButtonIndex", 15, CONFIG_NAME);
+
+            if (api_get_version() < MIN_API_VER){
+                dprintf("aime2aime: API dll is outdated! At least v.%x is required, DLL is v.%x", MIN_API_VER, api_get_version());
+                return FALSE;
+            }
+
+            HRESULT hr = api_init(L".\\ttio.ini");
+            if (!SUCCEEDED(hr)) {
+                dprintf("ttio: failed to initialize API\n");
+                return FALSE;
+            }
+
+            dprintf("ttio: Loaded\n");
+
+            api_send(PACKET_20_PING, 0, NULL);
+            api_block_card_reader(false);
+        }
+
+        dprintf("ttio: TTIO is loaded\ncard id=%s\n", cfg.cardid);
+
+    } else if (fdwReason == DLL_PROCESS_DETACH) {
+        if (aime_cfg.enable) {
+            aime_close();
+        }
     }
 
     return TRUE;
 }
 
 EXPORT int NESiCAReaderCancelRead() {
-    OutputDebugString("NESiCAReaderCancelRead\n");
-    reading = false;
+    dprintf("NESiCAReaderCancelRead\n");
+    game_is_reading = false;
+
+    if (aime_cfg.enable) {
+        aime_set_polling(false);
+    }
+    api_is_polling_for_card = false;
+
     return 1;
 }
 
 EXPORT int NESiCAReaderGetID(struct carddata *data) {
-    OutputDebugString("NESiCAReaderGetID\n");
+    dprintf("NESiCAReaderGetID\n");
     ZeroMemory(data, sizeof(struct carddata));
     if (scanned) {
-        memcpy(data->id, cfg.cardid, 16);
-        return 1;
+        if (api_cfg.enable && api_card != NULL) {
+            memcpy(data->id, api_card, FELICA_CARD_LEN);
+            return 1;
+        } else if (aime_cfg.enable) {
+            if (aime_get_card_type() == CARD_TYPE_FELICA) {
+                memcpy(data->id, aime_get_card_id(), aime_get_card_len());
+                return 1;
+            }
+        } else {
+            memcpy(data->id, cfg.cardid, FELICA_CARD_LEN);
+            return 1;
+        }
     }
     return 0;
 }
 
 EXPORT int NESiCAReaderGetResult() {
-    OutputDebugString("NESiCAReaderGetResult\n");
+    dprintf("NESiCAReaderGetResult\n");
     // OK = 0, error = 2, no reading = 3
     if (scanned) return 0;
-    if (!reading) return 3;
+    if (!game_is_reading) return 3;
+
+    if (api_card != NULL) {
+        return 0;
+    } else if (aime_cfg.enable) {
+        switch (aime_get_card_type()) {
+            case CARD_TYPE_NONE: return 3;
+            case CARD_TYPE_FELICA: return 0;
+            default: return 2;
+        }
+    }
+
     return 2;
 }
 
 EXPORT int NESiCAReaderGetStatus() {
     // is reading?
-    return reading ? 1 : 0;
+    return game_is_reading ? 1 : 0;
 }
 
 EXPORT int NESiCAReaderIsError() {
+    if (aime_cfg.enable) {
+        return !SUCCEEDED(aime_status);
+    }
     return 0;
 }
 
 EXPORT int NESiCAReaderRead() {
-    OutputDebugString("NESiCAReaderRead\n");
+    dprintf("NESiCAReaderRead\n");
     // start read
-    reading = true;
+    game_is_reading = true;
     scanned = false;
+    api_card = NULL;
+    api_is_polling_for_card = false;
+
+    if (aime_cfg.enable) {
+        aime_set_polling(true);
+    }
+
     return 1;
 }
 
@@ -98,7 +162,12 @@ EXPORT int ttioGetDeviceVersion() {
 }
 
 EXPORT int ttioClose() {
-    OutputDebugString("ttioClose\n");
+    dprintf("ttioClose\n");
+
+    if (aime_cfg.enable) {
+        aime_close();
+    }
+
     return 1;
 }
 
@@ -107,19 +176,56 @@ EXPORT int ttioGetStatus() {
 }
 
 EXPORT int ttioOpen() {
-    OutputDebugString("ttioOpen\n");
+    dprintf("ttioOpen\n");
+
+    if (aime_cfg.enable) {
+        aime_status = aime_connect(aime_cfg.port, aime_cfg.high_baudrate ? 115200 : 38400, aime_cfg.custom_led_flash);
+        if (SUCCEEDED(aime_status)) {
+            aime_debug_print_versions();
+        }
+    }
+
     return 1;
 }
 
 EXPORT int ttioUpdate(struct iodata *data) {
     ZeroMemory(data, sizeof(struct iodata));
-    if (reading && IsKeyDown(cfg.vk_scan)) {
+    api_card = api_get_and_clear_card_felica();
+    if ((game_is_reading && IsKeyDown(cfg.vk_scan)) || (aime_cfg.enable && aime_get_card_type() != CARD_TYPE_NONE) || (api_cfg.enable && api_card != NULL)) {
         scanned = true;
-        reading = false;
+        game_is_reading = false;
     }
     for (int i = 0; i < 32; i++) {
         if (IsKeyDown(cfg.vk_input[i])) {
             data->buttons |= 1 << i;
+        }
+    }
+
+    if (api_get_and_clear_service()) {
+        data->buttons |= 1 << api_cfg.service_index;
+    }
+    if (api_get_and_clear_test()) {
+        data->buttons |= 1 << api_cfg.test_index;
+    }
+    int c = api_get_and_clear_credits();
+    if (c > 0) {
+        data->buttons |= 1 << api_cfg.coin_index;
+    }
+
+    if (api_cfg.enable && aime_cfg.enable) {
+        if (!game_is_reading) {
+
+            uint8_t *rgb = api_get_aime_rgb_and_clear();
+            if (rgb != NULL) {
+                aime_led_set(rgb[0], rgb[1], rgb[2]);
+            }
+
+            if (api_get_card_switch_state()){
+                api_is_polling_for_card = api_get_card_reading_state_and_clear_switch_state();
+                dprintf("ttio: set polling by API (%d)\n", api_is_polling_for_card);
+                aime_set_polling(api_is_polling_for_card);
+            }
+
         }
     }
 
