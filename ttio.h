@@ -13,6 +13,8 @@ struct aime_config {
     uint8_t port;
     bool high_baudrate;
     bool custom_led_flash;
+    uint16_t read_delay;
+    uint16_t read_timeout;
 };
 
 struct api_config {
@@ -35,4 +37,10 @@ struct iodata {
 struct carddata {
     char id[16];
     char unk[28];
+};
+
+struct carddata_amic {
+    char id[16];
+    char accesscode[20];
+    uint8_t is_amic;
 };

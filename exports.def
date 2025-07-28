@@ -13,7 +13,11 @@ EXPORTS
     VisionUSBIOUpdate=ttioUpdate
     NESiCAReaderCancelRead
     NESiCAReaderGetID
+    NESiCAReaderGetIDAndAmic
     NESiCAReaderGetResult
     NESiCAReaderGetStatus
+    NESiCAReaderGetXioStatus
+    NESiCAReaderOpen=ttioOpen
     NESiCAReaderIsError
     NESiCAReaderRead
+    NESiCAReaderUpdate

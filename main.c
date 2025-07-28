@@ -27,7 +27,7 @@ static bool api_is_polling_for_card = false;
 
 boolean APIENTRY DllMain(UNUSED HMODULE hinstDLL, DWORD fdwReason, UNUSED LPVOID lpReserved) {
     if (fdwReason == DLL_PROCESS_ATTACH) {
-        dprintf("TTIO 0.2, (c) 2024-2025 Haruka\n");
+        dprintf("TTIO 0.3, (c) 2024-2025 Haruka\n");
 
         cfg.vk_scan = GetPrivateProfileIntA(TTIO_KEY_NAME, "scan", VK_RETURN, CONFIG_NAME);
         GetPrivateProfileStringA(TTIO_KEY_NAME, "card_id", "0000000000000000", cfg.cardid, 17, CONFIG_NAME);
@@ -42,6 +42,8 @@ boolean APIENTRY DllMain(UNUSED HMODULE hinstDLL, DWORD fdwReason, UNUSED LPVOID
             aime_cfg.port = GetPrivateProfileIntA(AIME_KEY_NAME, "port", 4, CONFIG_NAME);
             aime_cfg.high_baudrate = GetPrivateProfileIntA(AIME_KEY_NAME, "high_baudrate", 1, CONFIG_NAME);
             aime_cfg.custom_led_flash = GetPrivateProfileIntA(AIME_KEY_NAME, "custom_led_flash", 0, CONFIG_NAME);
+            aime_cfg.read_delay = GetPrivateProfileIntA(AIME_KEY_NAME, "read_delay", 1000, CONFIG_NAME);
+            aime_cfg.read_timeout = GetPrivateProfileIntA(AIME_KEY_NAME, "read_timeout", 0, CONFIG_NAME);
         }
 
         api_cfg.enable = GetPrivateProfileIntA(API_KEY_NAME, "enable", 0, CONFIG_NAME);
@@ -86,6 +88,7 @@ EXPORT int NESiCAReaderCancelRead() {
         aime_set_polling(false);
     }
     api_is_polling_for_card = false;
+    api_block_card_reader(false);
 
     return 1;
 }
@@ -108,6 +111,7 @@ void tohex(const unsigned char* in, const size_t insz, char* out, const size_t o
 
 EXPORT int NESiCAReaderGetID(struct carddata* data) {
     dprintf("NESiCAReaderGetID\n");
+    api_block_card_reader(false);
     ZeroMemory(data, sizeof(struct carddata));
     if (scanned) {
         if (api_cfg.enable && api_card != NULL) {
@@ -115,8 +119,7 @@ EXPORT int NESiCAReaderGetID(struct carddata* data) {
             return 1;
         } else if (aime_cfg.enable) {
             if (aime_get_card_type() == CARD_TYPE_FELICA) {
-                tohex((const unsigned char *) aime_get_card_id(), 8, data->id, 16);
-                memcpy(data->id, aime_get_card_id(), aime_get_card_len());
+                tohex((const unsigned char *) aime_get_card_id(), aime_get_card_len(), data->id, 16);
                 return 1;
             }
         } else {
@@ -128,16 +131,17 @@ EXPORT int NESiCAReaderGetID(struct carddata* data) {
 }
 
 EXPORT int NESiCAReaderGetResult() {
-    dprintf("NESiCAReaderGetResult\n");
+    //dprintf("NESiCAReaderGetResult\n");
     // OK = 0, error = 2, no reading = 3
     if (scanned) return 0;
-    if (!game_is_reading) return 3;
+    if (!game_is_reading || (aime_cfg.enable && !aime_is_polling())) return 3;
 
     if (api_card != NULL) {
         return 0;
     } else if (aime_cfg.enable) {
         switch (aime_get_card_type()) {
             case CARD_TYPE_NONE: return 3;
+            case CARD_TYPE_MIFARE: return 0;
             case CARD_TYPE_FELICA: return 0;
             default: return 2;
         }
@@ -148,6 +152,11 @@ EXPORT int NESiCAReaderGetResult() {
 
 EXPORT int NESiCAReaderGetStatus() {
     // is reading?
+    if (aime_cfg.enable) {
+        if (!aime_is_polling()) {
+            return 0;
+        }
+    }
     return game_is_reading ? 1 : 0;
 }
 
@@ -161,12 +170,15 @@ EXPORT int NESiCAReaderIsError() {
 EXPORT int NESiCAReaderRead() {
     dprintf("NESiCAReaderRead\n");
     // start read
-    game_is_reading = true;
-    scanned = false;
     api_card = NULL;
     api_is_polling_for_card = false;
+    game_is_reading = true;
+    scanned = false;
+
+    api_block_card_reader(true);
 
     if (aime_cfg.enable) {
+        aime_set_polling(false); // force reader restart
         aime_set_polling(true);
     }
 
@@ -195,6 +207,8 @@ EXPORT int ttioOpen() {
     dprintf("ttioOpen\n");
 
     if (aime_cfg.enable) {
+        aime_set_poll_delay(aime_cfg.read_delay);
+        aime_set_timeout(aime_cfg.read_timeout);
         aime_status = aime_connect(aime_cfg.port, aime_cfg.high_baudrate ? 115200 : 38400, aime_cfg.custom_led_flash);
         if (SUCCEEDED(aime_status)) {
             aime_debug_print_versions();
@@ -204,14 +218,32 @@ EXPORT int ttioOpen() {
     return 1;
 }
 
-EXPORT int ttioUpdate(struct iodata* data) {
-    ZeroMemory(data, sizeof(struct iodata));
+EXPORT int NESiCAReaderUpdate() {
     api_card = api_get_and_clear_card_felica();
     if ((game_is_reading && IsKeyDown(cfg.vk_scan)) || (aime_cfg.enable && aime_get_card_type() != CARD_TYPE_NONE) || (
-            api_cfg.enable && api_card != NULL)) {
+        api_cfg.enable && api_card != NULL)) {
         scanned = true;
         game_is_reading = false;
     }
+    if (api_cfg.enable && aime_cfg.enable) {
+        if (!game_is_reading) {
+            uint8_t* rgb = api_get_aime_rgb_and_clear();
+            if (rgb != NULL) {
+                aime_led_set(rgb[0], rgb[1], rgb[2]);
+            }
+
+            if (api_get_card_switch_state()) {
+                api_is_polling_for_card = api_get_card_reading_state_and_clear_switch_state();
+                dprintf("ttio: set polling by API (%d)\n", api_is_polling_for_card);
+                aime_set_polling(api_is_polling_for_card);
+            }
+        }
+    }
+    return 0;
+}
+
+EXPORT int ttioUpdate(struct iodata* data) {
+    ZeroMemory(data, sizeof(struct iodata));
     for (int i = 0; i < 32; i++) {
         if (IsKeyDown(cfg.vk_input[i])) {
             data->buttons |= 1 << i;
@@ -229,20 +261,37 @@ EXPORT int ttioUpdate(struct iodata* data) {
         data->buttons |= 1 << api_cfg.coin_index;
     }
 
-    if (api_cfg.enable && aime_cfg.enable) {
-        if (!game_is_reading) {
-            uint8_t* rgb = api_get_aime_rgb_and_clear();
-            if (rgb != NULL) {
-                aime_led_set(rgb[0], rgb[1], rgb[2]);
-            }
+    NESiCAReaderUpdate();
 
-            if (api_get_card_switch_state()) {
-                api_is_polling_for_card = api_get_card_reading_state_and_clear_switch_state();
-                dprintf("ttio: set polling by API (%d)\n", api_is_polling_for_card);
-                aime_set_polling(api_is_polling_for_card);
+    return 1;
+}
+
+EXPORT int NESiCAReaderGetIDAndAmic(struct carddata_amic* data) {
+    ZeroMemory(data, sizeof(struct carddata_amic));
+    if (scanned) {
+        if (api_cfg.enable && api_card != NULL) {
+            tohex(api_card, 8, data->id, 16);
+            return 1;
+        } else if (aime_cfg.enable) {
+            if (aime_get_card_type() == CARD_TYPE_FELICA) {
+                tohex((const unsigned char *) aime_get_card_id(), aime_get_card_len(), data->id, 16);
+                return 1;
+            } else if (aime_get_card_type() == CARD_TYPE_MIFARE) {
+                tohex((const unsigned char *) aime_get_card_id(), aime_get_card_len(), data->accesscode, 20);
+                data->is_amic = true;
+                return 1;
             }
+        } else {
+            memcpy(data->id, cfg.cardid, 16);
+            return 1;
         }
     }
+    return 0;
+}
 
+EXPORT int NESiCAReaderGetXioStatus() {
+    if (aime_cfg.enable) {
+        return !SUCCEEDED(aime_status) ? -3 : 1;
+    }
     return 1;
 }
