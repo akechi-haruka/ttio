@@ -28,7 +28,9 @@ struct iodata {
     int buttons;
     short analog[8];
     short encoder[4];
-    char unk2[32];
+    char unk[4];
+    char output[24];
+    char unk2[4];
     short coin[2];
     short coin2[2];
     char unk3[4];

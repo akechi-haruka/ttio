@@ -27,7 +27,7 @@ static bool api_is_polling_for_card = false;
 
 boolean APIENTRY DllMain(UNUSED HMODULE hinstDLL, DWORD fdwReason, UNUSED LPVOID lpReserved) {
     if (fdwReason == DLL_PROCESS_ATTACH) {
-        dprintf("TTIO 0.3, (c) 2024-2025 Haruka\n");
+        dprintf("TTIO 0.3.2, (c) 2024-2025 Haruka\n");
 
         cfg.vk_scan = GetPrivateProfileIntA(TTIO_KEY_NAME, "scan", VK_RETURN, CONFIG_NAME);
         GetPrivateProfileStringA(TTIO_KEY_NAME, "card_id", "0000000000000000", cfg.cardid, 17, CONFIG_NAME);
@@ -219,12 +219,12 @@ EXPORT int ttioOpen() {
 }
 
 EXPORT int NESiCAReaderUpdate() {
-    api_card = api_get_and_clear_card_felica();
     if ((game_is_reading && IsKeyDown(cfg.vk_scan)) || (aime_cfg.enable && aime_get_card_type() != CARD_TYPE_NONE) || (
         api_cfg.enable && api_card != NULL)) {
         scanned = true;
         game_is_reading = false;
     }
+
     if (api_cfg.enable && aime_cfg.enable) {
         if (!game_is_reading) {
             uint8_t* rgb = api_get_aime_rgb_and_clear();
@@ -236,6 +236,20 @@ EXPORT int NESiCAReaderUpdate() {
                 api_is_polling_for_card = api_get_card_reading_state_and_clear_switch_state();
                 dprintf("ttio: set polling by API (%d)\n", api_is_polling_for_card);
                 aime_set_polling(api_is_polling_for_card);
+            } else if (api_is_polling_for_card) {
+                uint8_t card = aime_get_card_type();
+                if (card != CARD_TYPE_NONE) {
+                    dprintf("ttio: read card of type %d\n", card);
+                    if (card == CARD_TYPE_FELICA) {
+                        api_send(PACKET_25_CARD_FELICA, aime_get_card_len(), (const uint8_t*)aime_get_card_id());
+                    } else if (card == CARD_TYPE_MIFARE) {
+                        api_send(PACKET_26_CARD_AIME, aime_get_card_len(), (const uint8_t*)aime_get_card_id());
+                    } else {
+                        struct api_error_t error;
+                        api_send(PACKET_36_ERROR, sizeof(error), (const uint8_t*)&error);
+                    }
+                    aime_set_polling(false);
+                }
             }
         }
     }
@@ -259,6 +273,7 @@ EXPORT int ttioUpdate(struct iodata* data) {
     int c = api_get_and_clear_credits();
     if (c > 0) {
         data->buttons |= 1 << api_cfg.coin_index;
+        data->coin[0] += (short)c;
     }
 
     NESiCAReaderUpdate();
