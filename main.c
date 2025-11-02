@@ -17,6 +17,8 @@
 
 static boolean game_is_reading = false;
 static boolean scanned = false;
+static uint16_t coin_counter = 0;
+
 static struct config cfg;
 static struct aime_config aime_cfg;
 static struct api_config api_cfg;
@@ -27,7 +29,7 @@ static bool api_is_polling_for_card = false;
 
 boolean APIENTRY DllMain(UNUSED HMODULE hinstDLL, DWORD fdwReason, UNUSED LPVOID lpReserved) {
     if (fdwReason == DLL_PROCESS_ATTACH) {
-        dprintf("TTIO 0.3.2, (c) 2024-2025 Haruka\n");
+        dprintf("TTIO 0.3.3, (c) 2024-2025 Haruka\n");
 
         cfg.vk_scan = GetPrivateProfileIntA(TTIO_KEY_NAME, "scan", VK_RETURN, CONFIG_NAME);
         GetPrivateProfileStringA(TTIO_KEY_NAME, "card_id", "0000000000000000", cfg.cardid, 17, CONFIG_NAME);
@@ -53,7 +55,7 @@ boolean APIENTRY DllMain(UNUSED HMODULE hinstDLL, DWORD fdwReason, UNUSED LPVOID
             api_cfg.coin_index = GetPrivateProfileIntA(API_KEY_NAME, "coinButtonIndex", 15, CONFIG_NAME);
 
             if (api_get_version() < MIN_API_VER) {
-                dprintf("aime2aime: API dll is outdated! At least v.%x is required, DLL is v.%x", MIN_API_VER,
+                dprintf("ttio: segapi dll is outdated! At least v.%x is required, DLL is v.%x", MIN_API_VER,
                         api_get_version());
                 return FALSE;
             }
@@ -80,12 +82,21 @@ boolean APIENTRY DllMain(UNUSED HMODULE hinstDLL, DWORD fdwReason, UNUSED LPVOID
     return TRUE;
 }
 
-EXPORT int NESiCAReaderCancelRead() {
+EXPORT int NESiCAReaderCancelRead(void) {
     dprintf("NESiCAReaderCancelRead\n");
     game_is_reading = false;
 
     if (aime_cfg.enable) {
-        aime_set_polling(false);
+        HRESULT hr;
+
+        hr = aime_led_set(0, 0, 0);
+        if (!SUCCEEDED(hr)) {
+            return 0;
+        }
+        hr = aime_set_polling(false);
+        if (!SUCCEEDED(hr)) {
+            return 0;
+        }
     }
     api_is_polling_for_card = false;
     api_block_card_reader(false);
@@ -109,15 +120,16 @@ void tohex(const unsigned char* in, const size_t insz, char* out, const size_t o
     }
 }
 
-EXPORT int NESiCAReaderGetID(struct carddata* data) {
+EXPORT int NESiCAReaderGetID(struct carddata_v2* data) {
     dprintf("NESiCAReaderGetID\n");
     api_block_card_reader(false);
-    ZeroMemory(data, sizeof(struct carddata));
+    ZeroMemory(data, sizeof(struct carddata_v2));
     if (scanned) {
         if (api_cfg.enable && api_card != NULL) {
             tohex(api_card, 8, data->id, 16);
             return 1;
-        } else if (aime_cfg.enable) {
+        }
+        if (aime_cfg.enable) {
             if (aime_get_card_type() == CARD_TYPE_FELICA) {
                 tohex((const unsigned char *) aime_get_card_id(), aime_get_card_len(), data->id, 16);
                 return 1;
@@ -130,7 +142,7 @@ EXPORT int NESiCAReaderGetID(struct carddata* data) {
     return 0;
 }
 
-EXPORT int NESiCAReaderGetResult() {
+EXPORT int NESiCAReaderGetResult(void) {
     //dprintf("NESiCAReaderGetResult\n");
     // OK = 0, error = 2, no reading = 3
     if (scanned) return 0;
@@ -138,10 +150,11 @@ EXPORT int NESiCAReaderGetResult() {
 
     if (api_card != NULL) {
         return 0;
-    } else if (aime_cfg.enable) {
+    }
+    if (aime_cfg.enable) {
         switch (aime_get_card_type()) {
             case CARD_TYPE_NONE: return 3;
-            case CARD_TYPE_MIFARE: return 0;
+            case CARD_TYPE_MIFARE:
             case CARD_TYPE_FELICA: return 0;
             default: return 2;
         }
@@ -150,7 +163,7 @@ EXPORT int NESiCAReaderGetResult() {
     return 2;
 }
 
-EXPORT int NESiCAReaderGetStatus() {
+EXPORT int NESiCAReaderGetStatus(void) {
     // is reading?
     if (aime_cfg.enable) {
         if (!aime_is_polling()) {
@@ -160,14 +173,14 @@ EXPORT int NESiCAReaderGetStatus() {
     return game_is_reading ? 1 : 0;
 }
 
-EXPORT int NESiCAReaderIsError() {
+EXPORT int NESiCAReaderIsError(void) {
     if (aime_cfg.enable) {
         return !SUCCEEDED(aime_status);
     }
     return 0;
 }
 
-EXPORT int NESiCAReaderRead() {
+EXPORT int NESiCAReaderRead(void) {
     dprintf("NESiCAReaderRead\n");
     // start read
     api_card = NULL;
@@ -185,11 +198,11 @@ EXPORT int NESiCAReaderRead() {
     return 1;
 }
 
-EXPORT int ttioGetDeviceVersion() {
+EXPORT int ttioGetDeviceVersion(void) {
     return 1;
 }
 
-EXPORT int ttioClose() {
+EXPORT int ttioClose(void) {
     dprintf("ttioClose\n");
 
     if (aime_cfg.enable) {
@@ -199,11 +212,11 @@ EXPORT int ttioClose() {
     return 1;
 }
 
-EXPORT int ttioGetStatus() {
+EXPORT int ttioGetStatus(void) {
     return 0x200; // ???
 }
 
-EXPORT int ttioOpen() {
+EXPORT int ttioOpen(void) {
     dprintf("ttioOpen\n");
 
     if (aime_cfg.enable) {
@@ -218,7 +231,7 @@ EXPORT int ttioOpen() {
     return 1;
 }
 
-EXPORT int NESiCAReaderUpdate() {
+EXPORT int NESiCAReaderUpdate(void) {
     if ((game_is_reading && IsKeyDown(cfg.vk_scan)) || (aime_cfg.enable && aime_get_card_type() != CARD_TYPE_NONE) || (
         api_cfg.enable && api_card != NULL)) {
         scanned = true;
@@ -257,7 +270,13 @@ EXPORT int NESiCAReaderUpdate() {
 }
 
 EXPORT int ttioUpdate(struct iodata* data) {
-    ZeroMemory(data, sizeof(struct iodata));
+
+    for (int i = 0; i < COIN_SLOT_COUNT; i++) {
+        if (data->coin_consume[i] > 0) {
+            data->coin[i] -= data->coin_consume[i];
+        }
+    }
+
     for (int i = 0; i < 32; i++) {
         if (IsKeyDown(cfg.vk_input[i])) {
             data->buttons |= 1 << i;
@@ -270,28 +289,32 @@ EXPORT int ttioUpdate(struct iodata* data) {
     if (api_get_and_clear_test()) {
         data->buttons |= 1 << api_cfg.test_index;
     }
-    int c = api_get_and_clear_credits();
+    const int c = api_get_and_clear_credits();
     if (c > 0) {
         data->buttons |= 1 << api_cfg.coin_index;
-        data->coin[0] += (short)c;
+        coin_counter += (short)c;
     }
+
+    data->coin[0] = coin_counter;
 
     NESiCAReaderUpdate();
 
     return 1;
 }
 
-EXPORT int NESiCAReaderGetIDAndAmic(struct carddata_amic* data) {
-    ZeroMemory(data, sizeof(struct carddata_amic));
+EXPORT int NESiCAReaderGetIDAndAmic(struct carddata_v1_amic* data) {
+    ZeroMemory(data, sizeof(struct carddata_v1_amic));
     if (scanned) {
         if (api_cfg.enable && api_card != NULL) {
             tohex(api_card, 8, data->id, 16);
             return 1;
-        } else if (aime_cfg.enable) {
+        }
+        if (aime_cfg.enable) {
             if (aime_get_card_type() == CARD_TYPE_FELICA) {
                 tohex((const unsigned char *) aime_get_card_id(), aime_get_card_len(), data->id, 16);
                 return 1;
-            } else if (aime_get_card_type() == CARD_TYPE_MIFARE) {
+            }
+            if (aime_get_card_type() == CARD_TYPE_MIFARE) {
                 tohex((const unsigned char *) aime_get_card_id(), aime_get_card_len(), data->accesscode, 20);
                 data->is_amic = true;
                 return 1;
@@ -304,7 +327,7 @@ EXPORT int NESiCAReaderGetIDAndAmic(struct carddata_amic* data) {
     return 0;
 }
 
-EXPORT int NESiCAReaderGetXioStatus() {
+EXPORT int NESiCAReaderGetXioStatus(void) {
     if (aime_cfg.enable) {
         return !SUCCEEDED(aime_status) ? -3 : 1;
     }

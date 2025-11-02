@@ -12,6 +12,7 @@ aimelib = subproject('aimelib')
 shared_library('ttio', 'main.c',
                c_args : lib_args,
                vs_module_defs : 'exports.def',
+               name_prefix : '',
                link_with : [
                    segapi.get_variable('api_lib'),
                    aimelib.get_variable('aime_lib')

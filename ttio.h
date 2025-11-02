@@ -2,6 +2,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#define COIN_SLOT_COUNT 2
+
 struct config {
     unsigned int vk_scan;
     unsigned int vk_input[32];
@@ -31,18 +33,25 @@ struct iodata {
     char unk[4];
     char output[24];
     char unk2[4];
-    short coin[2];
-    short coin2[2];
+    uint16_t coin[COIN_SLOT_COUNT];
+    short coin_consume[COIN_SLOT_COUNT];
     char unk3[4];
 };
 
-struct carddata {
+struct carddata_v1 {
     char id[16];
-    char unk[28];
+    char accesscode[20];
 };
 
-struct carddata_amic {
+struct carddata_v1_amic {
     char id[16];
+    char accesscode[20];
+    uint8_t is_amic;
+};
+
+struct carddata_v2 {
+    char id[16];
+    char nesica_uid[7];
     char accesscode[20];
     uint8_t is_amic;
 };
