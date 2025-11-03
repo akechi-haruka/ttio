@@ -17,7 +17,6 @@
 
 static boolean game_is_reading = false;
 static boolean scanned = false;
-static uint16_t coin_counter = 0;
 
 static struct config cfg;
 static struct aime_config aime_cfg;
