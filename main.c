@@ -29,7 +29,7 @@ static bool api_is_polling_for_card = false;
 
 boolean APIENTRY DllMain(UNUSED HMODULE hinstDLL, DWORD fdwReason, UNUSED LPVOID lpReserved) {
     if (fdwReason == DLL_PROCESS_ATTACH) {
-        dprintf("TTIO 0.3.3, (c) 2024-2025 Haruka\n");
+        dprintf("TTIO 0.4, (c) 2024-2025 Haruka\n");
 
         cfg.vk_scan = GetPrivateProfileIntA(TTIO_KEY_NAME, "scan", VK_RETURN, CONFIG_NAME);
         GetPrivateProfileStringA(TTIO_KEY_NAME, "card_id", "0000000000000000", cfg.cardid, 17, CONFIG_NAME);
@@ -46,6 +46,9 @@ boolean APIENTRY DllMain(UNUSED HMODULE hinstDLL, DWORD fdwReason, UNUSED LPVOID
             aime_cfg.custom_led_flash = GetPrivateProfileIntA(AIME_KEY_NAME, "custom_led_flash", 0, CONFIG_NAME);
             aime_cfg.read_delay = GetPrivateProfileIntA(AIME_KEY_NAME, "read_delay", 1000, CONFIG_NAME);
             aime_cfg.read_timeout = GetPrivateProfileIntA(AIME_KEY_NAME, "read_timeout", 0, CONFIG_NAME);
+            aime_cfg.led_index_r = GetPrivateProfileIntA(AIME_KEY_NAME, "led_index_r", 9, CONFIG_NAME);
+            aime_cfg.led_index_g = GetPrivateProfileIntA(AIME_KEY_NAME, "led_index_g", 10, CONFIG_NAME);
+            aime_cfg.led_index_b = GetPrivateProfileIntA(AIME_KEY_NAME, "led_index_b", 11, CONFIG_NAME);
         }
 
         api_cfg.enable = GetPrivateProfileIntA(API_KEY_NAME, "enable", 0, CONFIG_NAME);
@@ -109,9 +112,9 @@ void tohex(const unsigned char* in, const size_t insz, char* out, const size_t o
     const char* hex = "0123456789ABCDEF";
     char* pout = out;
     for (; pin < in + insz; pout += 2, pin++) {
-        pout[0] = hex[(*pin >> 4) & 0xF];
+        pout[0] = hex[*pin >> 4 & 0xF];
         pout[1] = hex[*pin & 0xF];
-        if (pout + 2 - out > outsz) {
+        if ((size_t)(pout + 2 - out) > outsz) {
             /* Better to truncate output string than overflow buffer */
             /* it would be still better to either return a status */
             /* or ensure the target buffer is large enough and it never happen */
@@ -271,12 +274,6 @@ EXPORT int NESiCAReaderUpdate(void) {
 
 EXPORT int ttioUpdate(struct iodata* data) {
 
-    for (int i = 0; i < COIN_SLOT_COUNT; i++) {
-        if (data->coin_consume[i] > 0) {
-            data->coin[i] -= data->coin_consume[i];
-        }
-    }
-
     for (int i = 0; i < 32; i++) {
         if (IsKeyDown(cfg.vk_input[i])) {
             data->buttons |= 1 << i;
@@ -292,10 +289,12 @@ EXPORT int ttioUpdate(struct iodata* data) {
     const int c = api_get_and_clear_credits();
     if (c > 0) {
         data->buttons |= 1 << api_cfg.coin_index;
-        coin_counter += (short)c;
+        data->coin[0] += (short)c;
     }
 
-    data->coin[0] = coin_counter;
+    if (aime_cfg.enable && !aime_cfg.custom_led_flash) {
+        aime_led_set(aime_cfg.led_index_r, aime_cfg.led_index_g, aime_cfg.led_index_b);
+    }
 
     NESiCAReaderUpdate();
 

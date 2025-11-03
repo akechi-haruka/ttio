@@ -17,6 +17,9 @@ struct aime_config {
     bool custom_led_flash;
     uint16_t read_delay;
     uint16_t read_timeout;
+    uint8_t led_index_r;
+    uint8_t led_index_g;
+    uint8_t led_index_b;
 };
 
 struct api_config {
