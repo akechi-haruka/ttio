@@ -25,13 +25,19 @@ static struct api_config api_cfg;
 static HRESULT aime_status = S_FALSE;
 static uint8_t* api_card = NULL;
 static bool api_is_polling_for_card = false;
+static int32_t mask_states[MASK_COUNT] = {0};
+static bool mask_key_pressed[MASK_COUNT] = {0};
 
 boolean APIENTRY DllMain(UNUSED HMODULE hinstDLL, DWORD fdwReason, UNUSED LPVOID lpReserved) {
     if (fdwReason == DLL_PROCESS_ATTACH) {
-        dprintf("TTIO 0.4, (c) 2024-2025 Haruka\n");
+        dprintf("TTIO 0.5, (c) 2024-2026 Haruka\n");
+
+        wchar_t cwd[MAX_PATH];
+        GetCurrentDirectoryW(MAX_PATH, cwd);
+        dprintf("Looking for config at: %ls\n", cwd);
 
         cfg.vk_scan = GetPrivateProfileIntA(TTIO_KEY_NAME, "scan", VK_RETURN, CONFIG_NAME);
-        GetPrivateProfileStringA(TTIO_KEY_NAME, "card_id", "0000000000000000", cfg.cardid, 17, CONFIG_NAME);
+        GetPrivateProfileStringA(TTIO_KEY_NAME, "card_id", "0000000000000000", cfg.card_id, 17, CONFIG_NAME);
         for (int i = 0; i < 32; i++) {
             char key[16];
             sprintf(key, "key%d", i);
@@ -74,7 +80,21 @@ boolean APIENTRY DllMain(UNUSED HMODULE hinstDLL, DWORD fdwReason, UNUSED LPVOID
             api_block_card_reader(false);
         }
 
-        dprintf("ttio: TTIO is loaded\ncard id=%s\n", cfg.cardid);
+        for (int i = 0; i < MASK_COUNT; i++) {
+            char key[16];
+            sprintf(key, "mask%d_mode", i);
+            cfg.mask_config[i].mode = GetPrivateProfileIntA(TTIO_KEY_NAME, key, 0, CONFIG_NAME);
+            if (cfg.mask_config[i].mode != 0) {
+                sprintf(key, "mask%d_up", i);
+                cfg.mask_config[i].vk_up = GetPrivateProfileIntA(TTIO_KEY_NAME, key, 0, CONFIG_NAME);
+                sprintf(key, "mask%d_down", i);
+                cfg.mask_config[i].vk_down = GetPrivateProfileIntA(TTIO_KEY_NAME, key, 0, CONFIG_NAME);
+                sprintf(key, "mask%d_initial", i);
+                mask_states[i] = cfg.mask_config[i].initial = GetPrivateProfileIntA(TTIO_KEY_NAME, key, 0, CONFIG_NAME);
+            }
+        }
+
+        dprintf("ttio: TTIO is loaded\ncard id=%s\n", cfg.card_id);
     } else if (fdwReason == DLL_PROCESS_DETACH) {
         if (aime_cfg.enable) {
             aime_close();
@@ -89,9 +109,7 @@ EXPORT int NESiCAReaderCancelRead(void) {
     game_is_reading = false;
 
     if (aime_cfg.enable) {
-        HRESULT hr;
-
-        hr = aime_led_set(0, 0, 0);
+        HRESULT hr = aime_led_set(0, 0, 0);
         if (!SUCCEEDED(hr)) {
             return 0;
         }
@@ -106,17 +124,17 @@ EXPORT int NESiCAReaderCancelRead(void) {
     return 1;
 }
 
-void tohex(const unsigned char* in, const size_t insz, char* out, const size_t outsz) {
+static void to_hex(const unsigned char* in, const size_t insz, char* out, const size_t outsz) {
     const unsigned char* pin = in;
-    const char* hex = "0123456789ABCDEF";
     char* pout = out;
     for (; pin < in + insz; pout += 2, pin++) {
+        const char* hex = "0123456789ABCDEF";
         pout[0] = hex[*pin >> 4 & 0xF];
         pout[1] = hex[*pin & 0xF];
         if ((size_t)(pout + 2 - out) > outsz) {
             /* Better to truncate output string than overflow buffer */
             /* it would be still better to either return a status */
-            /* or ensure the target buffer is large enough and it never happen */
+            /* or ensure the target buffer is large enough and it never happens */
             break;
         }
     }
@@ -128,16 +146,16 @@ EXPORT int NESiCAReaderGetID(struct carddata_v2* data) {
     ZeroMemory(data, sizeof(struct carddata_v2));
     if (scanned) {
         if (api_cfg.enable && api_card != NULL) {
-            tohex(api_card, 8, data->id, 16);
+            to_hex(api_card, 8, data->id, 16);
             return 1;
         }
         if (aime_cfg.enable) {
             if (aime_get_card_type() == CARD_TYPE_FELICA) {
-                tohex((const unsigned char *) aime_get_card_id(), aime_get_card_len(), data->id, 16);
+                to_hex((const unsigned char*)aime_get_card_id(), aime_get_card_len(), data->id, 16);
                 return 1;
             }
         } else {
-            memcpy(data->id, cfg.cardid, 16);
+            memcpy(data->id, cfg.card_id, 16);
             return 1;
         }
     }
@@ -155,10 +173,10 @@ EXPORT int NESiCAReaderGetResult(void) {
     }
     if (aime_cfg.enable) {
         switch (aime_get_card_type()) {
-            case CARD_TYPE_NONE: return 3;
-            case CARD_TYPE_MIFARE:
-            case CARD_TYPE_FELICA: return 0;
-            default: return 2;
+        case CARD_TYPE_NONE: return 3;
+        case CARD_TYPE_MIFARE:
+        case CARD_TYPE_FELICA: return 0;
+        default: return 2;
         }
     }
 
@@ -260,7 +278,10 @@ EXPORT int NESiCAReaderUpdate(void) {
                     } else if (card == CARD_TYPE_MIFARE) {
                         api_send(PACKET_26_CARD_AIME, aime_get_card_len(), (const uint8_t*)aime_get_card_id());
                     } else {
-                        struct api_error_t error;
+                        struct api_error_t error = {
+                            .code = 1,
+                            .type = 1
+                        };
                         api_send(PACKET_36_ERROR, sizeof(error), (const uint8_t*)&error);
                     }
                     aime_set_polling(false);
@@ -272,7 +293,6 @@ EXPORT int NESiCAReaderUpdate(void) {
 }
 
 EXPORT int ttioUpdate(struct iodata* data) {
-
     for (int i = 0; i < 32; i++) {
         if (IsKeyDown(cfg.vk_input[i])) {
             data->buttons |= 1 << i;
@@ -291,6 +311,31 @@ EXPORT int ttioUpdate(struct iodata* data) {
         data->coin[0] += (short)c;
     }
 
+    for (int i = 0; i < MASK_COUNT; i++) {
+        const struct mask_config mask = cfg.mask_config[i];
+
+        if (mask.mode == 1) {
+            // densha de go mascon
+
+            if (IsKeyDown(mask.vk_up)) {
+                if (mask_states[i] < 14 && !mask_key_pressed[i]) {
+                    mask_states[i]++;
+                }
+                mask_key_pressed[i] = true;
+            } else if (IsKeyDown(mask.vk_down)) {
+                if (mask_states[i] > 0 && !mask_key_pressed[i]) {
+                    mask_states[i]--;
+                }
+                mask_key_pressed[i] = true;
+            } else {
+                mask_key_pressed[i] = false;
+            }
+
+            static const int table[15] = { 6, 4, 5, 1, 0, 2, 3, 11, 10, 8, 9, 13, 12, 14, 15};
+            data->buttons |= table[mask_states[i]];
+        }
+    }
+
     if (aime_cfg.enable && !aime_cfg.custom_led_flash) {
         aime_led_set(aime_cfg.led_index_r, aime_cfg.led_index_g, aime_cfg.led_index_b);
     }
@@ -304,21 +349,21 @@ EXPORT int NESiCAReaderGetIDAndAmic(struct carddata_v1_amic* data) {
     ZeroMemory(data, sizeof(struct carddata_v1_amic));
     if (scanned) {
         if (api_cfg.enable && api_card != NULL) {
-            tohex(api_card, 8, data->id, 16);
+            to_hex(api_card, 8, data->id, 16);
             return 1;
         }
         if (aime_cfg.enable) {
             if (aime_get_card_type() == CARD_TYPE_FELICA) {
-                tohex((const unsigned char *) aime_get_card_id(), aime_get_card_len(), data->id, 16);
+                to_hex((const unsigned char*)aime_get_card_id(), aime_get_card_len(), data->id, 16);
                 return 1;
             }
             if (aime_get_card_type() == CARD_TYPE_MIFARE) {
-                tohex((const unsigned char *) aime_get_card_id(), aime_get_card_len(), data->accesscode, 20);
+                to_hex((const unsigned char*)aime_get_card_id(), aime_get_card_len(), data->accesscode, 20);
                 data->is_amic = true;
                 return 1;
             }
         } else {
-            memcpy(data->id, cfg.cardid, 16);
+            memcpy(data->id, cfg.card_id, 16);
             return 1;
         }
     }

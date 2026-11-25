@@ -3,11 +3,20 @@
 #include <stdint.h>
 
 #define COIN_SLOT_COUNT 2
+#define MASK_COUNT 4
+
+struct mask_config {
+    uint8_t mode;
+    unsigned int vk_up;
+    unsigned int vk_down;
+    unsigned int initial;
+};
 
 struct config {
     unsigned int vk_scan;
     unsigned int vk_input[32];
-    char cardid[17];
+    char card_id[17];
+    struct mask_config mask_config[MASK_COUNT];
 };
 
 struct aime_config {
