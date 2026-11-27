@@ -30,7 +30,7 @@ static bool mask_key_pressed[MASK_COUNT] = {0};
 
 boolean APIENTRY DllMain(UNUSED HMODULE hinstDLL, DWORD fdwReason, UNUSED LPVOID lpReserved) {
     if (fdwReason == DLL_PROCESS_ATTACH) {
-        dprintf("TTIO 0.5, (c) 2024-2026 Haruka\n");
+        dprintf("TTIO 0.5.1, (c) 2024-2026 Haruka\n");
 
         wchar_t cwd[MAX_PATH];
         GetCurrentDirectoryW(MAX_PATH, cwd);
@@ -294,7 +294,12 @@ EXPORT int NESiCAReaderUpdate(void) {
 
 EXPORT int ttioUpdate(struct iodata* data) {
     for (int i = 0; i < 32; i++) {
-        if (IsKeyDown(cfg.vk_input[i])) {
+        if (cfg.vk_input[i] & 0x100) {
+            if (!IsKeyDown(cfg.vk_input[i] & ~0x100)) {
+                data->buttons |= 1 << i;
+            }
+        }
+        if (cfg.vk_input[i] == 0xFF || IsKeyDown(cfg.vk_input[i])) {
             data->buttons |= 1 << i;
         }
     }
